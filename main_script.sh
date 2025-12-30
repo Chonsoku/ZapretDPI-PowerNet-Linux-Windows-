@@ -114,7 +114,7 @@ select_strategy() {
     
     # Обычный выбор стратегии для интерактивного режима
     local IFS=$'\n'
-    local bat_files=($(find_bat_files "general*.bat" | xargs -0 -n1 echo) $(find_bat_files "discord.bat" | xargs -0 -n1 echo))
+    local bat_files=($(find_bat_files "general*.bat" | xargs -0 -n1 echo) $(find_bat_files "GENERAL*.bat" | xargs -0 -n1 echo))
     
     if [ ${#bat_files[@]} -eq 0 ]; then
         cd ..
