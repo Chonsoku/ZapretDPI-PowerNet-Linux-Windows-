@@ -1,0 +1,6 @@
+НЕ ЗАБЫТЬ ПОСТАВИТЬ "ip-set" НА ANY или LOADER!
+
+
+
+*На LOADER - работают сервера в Minecraft Bedrock, и ещё некоторые домены, которые указанны в list-general-user.txt
+*На ANY - работает все, что проходит через GameFilter
