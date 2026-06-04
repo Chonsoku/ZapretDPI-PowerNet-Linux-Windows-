@@ -19,7 +19,6 @@ piston-meta.mojang.com
 piston-data.mojang.com
 libraries.minecraft.net
 files.prismlauncher.org
-maven.minecraftforge.net
 launcher.mojang.com
 resources.download.minecraft.net
 sessionserver.mojang.com
@@ -122,6 +121,9 @@ status.neoforged.net
 links.neoforged.net
 discord.neoforged.net
 neoforged.crowdin.com
+ely.by
+ely.*
+*.ely.by
 
 *.roblox.com
 roblox.com

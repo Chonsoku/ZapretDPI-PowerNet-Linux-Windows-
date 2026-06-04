@@ -27,4 +27,5 @@ vencord.dev
 vencord.*
 *.vencord.dev
 *.vencord.*
-api.vencord.dev
+api.vencord.*
+maven.minecraftforge.net
