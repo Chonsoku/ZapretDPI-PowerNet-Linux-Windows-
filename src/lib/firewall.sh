@@ -1,92 +1,143 @@
 #!/usr/bin/env bash
 
 # =============================================================================
-# Функции для работы с nftables
+# Загрузчик бэкендов файрвола
+# =============================================================================
+# Добавление нового бэкенда:
+#   1. Создать src/firewall-backends/<name>.sh
+#   2. Определить три функции: backend_check, backend_setup, backend_clear
+#   3. Всё — авто-детект подберёт файл сам
 # =============================================================================
 
-# Подключаем константы если ещё не подключены
+[[ -n "${_FIREWALL_SH_LOADED:-}" ]] && return 0
+_FIREWALL_SH_LOADED=1
+
 if [[ -z "$NFT_TABLE" ]]; then
     source "$(dirname "${BASH_SOURCE[0]}")/constants.sh"
 fi
 
-# Проверяем наличие nftables
-if ! command -v nft >/dev/null 2>&1; then
-    echo "Ошибка: nftables не установлен. Установите пакет nftables."
-    exit 1
-fi
+_BACKENDS_DIR="$(realpath "$(dirname "${BASH_SOURCE[0]}")/../firewall-backends")"
+_LOADED_BACKEND=""
 
 # -----------------------------------------------------------------------------
-# nft_setup - создаёт таблицу, цепочку и правила nftables
+# _find_backend_file — найти файл бэкенда по каноническому имени
 # -----------------------------------------------------------------------------
-# Аргументы:
-#   $1 - tcp_ports   (например: "80,443" или "")
-#   $2 - udp_ports   (например: "443,50000-50100" или "")
-#   $3 - interface   (например: "eth0" или "any" или "")
-#   $4 - table       (опционально, по умолчанию $NFT_TABLE)
-#   $5 - chain       (опционально, по умолчанию $NFT_CHAIN)
-#   $6 - queue_num   (опционально, по умолчанию $NFT_QUEUE_NUM)
-#   $7 - mark        (опционально, по умолчанию $NFT_MARK)
-#   $8 - comment     (опционально, по умолчанию $NFT_RULE_COMMENT)
+# Ищет среди файлов вида <префикс-имя>.sh, возвращает полный путь.
+# Префикс — две цифры + тире (00-, 01-). Без префикса тоже работает.
+# Пример: _find_backend_file "nftables" → ".../00-nftables.sh"
 # -----------------------------------------------------------------------------
-nft_setup() {
-    local tcp_ports="${1:-}"
-    local udp_ports="${2:-}"
-    local interface="${3:-}"
-    local table="${4:-$NFT_TABLE}"
-    local chain="${5:-$NFT_CHAIN}"
-    local queue_num="${6:-$NFT_QUEUE_NUM}"
-    local mark="${7:-$NFT_MARK}"
-    local comment="${8:-$NFT_RULE_COMMENT}"
+_find_backend_file() {
+    local name="$1"
+    for f in "$_BACKENDS_DIR"/*.sh; do
+        [[ -f "$f" ]] || continue
+        local base clean
+        base=$(basename "$f" .sh)
+        clean="$base"
+        [[ "$base" =~ ^[0-9][0-9]-(.*) ]] && clean="${BASH_REMATCH[1]}"
+        if [[ "$clean" == "$name" ]]; then
+            echo "$f"
+            return 0
+        fi
+    done
+    return 1
+}
 
-    local oif_clause=""
-    if [[ -n "$interface" && "$interface" != "any" ]]; then
-        oif_clause="oifname \"$interface\""
-    fi
-
-    # Очищаем существующую таблицу
-    if elevate nft list tables 2>/dev/null | grep -q "$table"; then
-        elevate nft flush chain "$table" "$chain" 2>/dev/null
-        elevate nft delete chain "$table" "$chain" 2>/dev/null
-        elevate nft delete table "$table" 2>/dev/null
-    fi
-
-    # Создаём таблицу и цепочку
-    elevate nft add table "$table"
-    elevate nft add chain "$table" "$chain" { type filter hook output priority 0\; }
-
-    # Добавляем TCP правило
-    if [[ -n "$tcp_ports" ]]; then
-        elevate nft add rule "$table" "$chain" $oif_clause \
-            meta mark != "$mark" tcp dport "{$tcp_ports}" \
-            counter queue num "$queue_num" bypass \
-            comment "\"$comment\""
-    fi
-
-    # Добавляем UDP правило
-    if [[ -n "$udp_ports" ]]; then
-        elevate nft add rule "$table" "$chain" $oif_clause \
-            meta mark != "$mark" udp dport "{$udp_ports}" \
-            counter queue num "$queue_num" bypass \
-            comment "\"$comment\""
+# -----------------------------------------------------------------------------
+# _canonical_name — получить каноническое имя из имени файла
+# -----------------------------------------------------------------------------
+# Пример: "00-nftables" → "nftables", "nftables" → "nftables"
+# -----------------------------------------------------------------------------
+_canonical_name() {
+    local base="$1"
+    if [[ "$base" =~ ^[0-9][0-9]-(.*) ]]; then
+        echo "${BASH_REMATCH[1]}"
+    else
+        echo "$base"
     fi
 }
 
 # -----------------------------------------------------------------------------
-# nft_clear - удаляет таблицу и цепочку nftables
+# detect_firewall_backend — определяет, какой бэкенд использовать
 # -----------------------------------------------------------------------------
-# Аргументы:
-#   $1 - table   (опционально, по умолчанию $NFT_TABLE)
-#   $2 - chain   (опционально, по умолчанию $NFT_CHAIN)
+# Авто-детект: перебирает все .sh в _BACKENDS_DIR, проверяет backend_check().
+# Порядок = алфавитный по имени файла (00-nftables > 01-iptables).
+# Можно принудительно указать FIREWALL_BACKEND=<name>.
 # -----------------------------------------------------------------------------
-nft_clear() {
-    local table="${1:-$NFT_TABLE}"
-    local chain="${2:-$NFT_CHAIN}"
+detect_firewall_backend() {
+    local backend="${FIREWALL_BACKEND:-auto}"
 
-    if elevate nft list tables 2>/dev/null | grep -q "$table"; then
-        if elevate nft list chain "$table" "$chain" >/dev/null 2>&1; then
-            elevate nft flush chain "$table" "$chain" 2>/dev/null
-            elevate nft delete chain "$table" "$chain" 2>/dev/null
+    if [[ "$backend" != "auto" ]]; then
+        if ! _find_backend_file "$backend" >/dev/null; then
+            handle_error "Бэкенд '$backend' не найден в $_BACKENDS_DIR"
         fi
-        elevate nft delete table "$table" 2>/dev/null
+        echo "$backend"
+        return 0
     fi
+
+    for module in "$_BACKENDS_DIR"/*.sh; do
+        [[ -f "$module" ]] || continue
+        local name
+        name=$(_canonical_name "$(basename "$module" .sh)")
+        if (
+            source "$module" >/dev/null 2>&1
+            backend_check >/dev/null 2>&1
+        ); then
+            echo "$name"
+            return 0
+        fi
+    done
+
+    handle_error "Не найден ни один доступный бэкенд файрвола"
+}
+
+# -----------------------------------------------------------------------------
+# load_firewall_backend — загружает модуль бэкенда
+# -----------------------------------------------------------------------------
+load_firewall_backend() {
+    local backend
+    backend=$(detect_firewall_backend)
+
+    local module
+    module=$(_find_backend_file "$backend") || {
+        handle_error "Модуль бэкенда не найден: $backend"
+    }
+
+    source "$module"
+
+    if ! backend_check; then
+        handle_error "Бэкенд $backend недоступен (не установлены необходимые утилиты)"
+    fi
+
+    _LOADED_BACKEND="$backend"
+    log "Загружен бэкенд файрвола: $backend"
+}
+
+# -----------------------------------------------------------------------------
+# firewall_setup — создаёт правила через загруженный бэкенд
+# -----------------------------------------------------------------------------
+firewall_setup() {
+    [[ -z "$_LOADED_BACKEND" ]] && load_firewall_backend
+    backend_setup "$@" || handle_error "Ошибка при настройке $_LOADED_BACKEND"
+    log "Настройка $_LOADED_BACKEND завершена (TCP: ${1:-—}, UDP: ${2:-—})"
+}
+
+# -----------------------------------------------------------------------------
+# firewall_clear — удаляет правила через загруженный бэкенд
+# -----------------------------------------------------------------------------
+firewall_clear() {
+    [[ -z "$_LOADED_BACKEND" ]] && load_firewall_backend
+    backend_clear
+    log "Очистка $_LOADED_BACKEND завершена"
+}
+
+# -----------------------------------------------------------------------------
+# list_available_backends — вывести список доступных бэкендов (канонические имена)
+# -----------------------------------------------------------------------------
+list_available_backends() {
+    for f in "$_BACKENDS_DIR"/*.sh; do
+        [[ -f "$f" ]] || continue
+        local base
+        base=$(basename "$f" .sh)
+        _canonical_name "$base"
+    done
 }

@@ -21,7 +21,8 @@ create_conf_file() {
     # 1. Выбор интерфейса
     local interfaces=("any" $(ls /sys/class/net))
     if [ ${#interfaces[@]} -eq 0 ]; then
-        handle_error "Не найдены сетевые интерфейсы"
+        show_error "Не найдены сетевые интерфейсы"
+        return 0
     fi
     echo "Доступные сетевые интерфейсы:"
     select chosen_interface in "${interfaces[@]}"; do
@@ -29,26 +30,54 @@ create_conf_file() {
             echo "Выбран интерфейс: $chosen_interface"
             break
         fi
-        echo "Неверный выбор. Попробуйте еще раз."
+        show_error "Неверный выбор. Попробуйте еще раз."
     done
 
-    # 2. Gamefilter
-    read -p "Включить Gamefilter? [y/N] [n]: " enable_gamefilter
+    # 2. GamefilterTCP
+    read -p "Включить GamefilterTCP? [y/N] [n]: " enable_gamefilter
     if [[ "$enable_gamefilter" =~ ^[Yy1] ]]; then
-        gamefilter_choice="true"
+        local gamefilter_choice_tcp="true"
     else
-        gamefilter_choice="false"
+        local gamefilter_choice_tcp="false"
     fi
 
-    # 3. Выбор стратегии
+    # 3. GamefilterUDP
+    read -p "Включить GamefilterUDP? [y/N] [n]: " enable_gamefilter
+    if [[ "$enable_gamefilter" =~ ^[Yy1] ]]; then
+        local gamefilter_choice_udp="true"
+    else
+        local gamefilter_choice_udp="false"
+    fi
+
+    # 4. Выбор стратегии
     select_strategy_interactive
     local strategy_choice="$selected_strategy"
+
+    # 5. Выбор бэкенда файрвола
+    echo ""
+    echo "Выберите бэкенд файрвола:"
+    local backends=()
+    local i=1
+    echo "$i) auto (автоопределение)"
+    ((i++))
+    while IFS= read -r backend; do
+        backends+=("$backend")
+        echo "$i) $backend"
+        ((i++))
+    done < <(list_available_backends)
+    read -p "Ваш выбор [1]: " fw_choice
+    local fw_backend="auto"
+    if [[ "$fw_choice" -gt 1 && "$fw_choice" -lt "$i" ]]; then
+        fw_backend="${backends[$((fw_choice - 2))]}"
+    fi
 
     # Записываем полученные значения в conf.env
     cat <<EOF >"$CONF_FILE"
 interface=$chosen_interface
-gamefilter=$gamefilter_choice
+gamefiltertcp=$gamefilter_choice_tcp
+gamefilterudp=$gamefilter_choice_udp
 strategy=$strategy_choice
+firewall_backend=$fw_backend
 EOF
 
     if [[ "$is_editing" == true ]]; then
@@ -66,6 +95,9 @@ EOF
     else
         echo "Конфигурация записана в $CONF_FILE."
     fi
+
+    echo "Текущая конфигурация:"
+    cat "$CONF_FILE"
 }
 
 # Функция для вывода текущей конфигурации
@@ -84,7 +116,9 @@ show_config() {
 update_config() {
     local strategy="$1"
     local interface="${2:-any}"
-    local gamefilter="$3"
+    local gamefiltertcp="$3"
+    local gamefilterudp="$4"
+    local firewall_backend="${5:-auto}"
 
     # Валидация и нормализация названия стратегии
     local normalized_strategy
@@ -106,8 +140,10 @@ update_config() {
 
     cat > "$CONF_FILE" << ENV
 interface=${interface}
-gamefilter=${gamefilter}
+gamefiltertcp=${gamefiltertcp}
+gamefilterudp=${gamefilterudp}
 strategy=${normalized_strategy}
+firewall_backend=${firewall_backend}
 ENV
 
     echo "Конфигурация обновлена."
@@ -128,13 +164,16 @@ show_config_usage() {
     echo "    set <STRATEGY> [INTERFACE]   Set configuration"
     echo
     echo "Options for 'set':"
-    echo "    -g, --gamefilter    Enable gamefilter"
-    echo "    -n, --norestart     Do not restart the service"
+    echo "    -gt, --gamefiltertcp        Enable gamefiltertcp"
+    echo "    -gu, --gamefilterudp        Enable gamefilterudp"
+    echo "    -fb, --firewall-backend <BACKEND>   Firewall backend: auto, nftables, iptables"
+    echo "    -n, --norestart             Do not restart the service"
     echo
     echo "Examples:"
     echo "    $(basename "$0") config show"
     echo "    $(basename "$0") config set discord"
     echo "    $(basename "$0") config set discord eth0 -g"
+    echo "    $(basename "$0") config set discord eth0 -fb iptables"
 }
 
 # Обработчик команды config
@@ -149,16 +188,26 @@ handle_config_command() {
         set)
             shift
             # Парсинг флагов для set
-            local gamefilter=false
+            local gamefiltertcp=false
+            local gamefilterudp=false
             local restart_svc=true
             local strategy=""
             local iface="any"
+            local fw_backend="auto"
 
             while [[ $# -gt 0 ]]; do
                 case $1 in
-                    -g|--gamefilter)
-                        gamefilter=true
+                    -gt|--gamefiltertcp)
+                        gamefiltertcp=true
                         shift
+                        ;;
+                    -gu|--gamefilterudp)
+                        gamefilterudp=true
+                        shift
+                        ;;
+                    -fb|--firewall-backend)
+                        fw_backend="$2"
+                        shift 2
                         ;;
                     -n|--norestart)
                         restart_svc=false
@@ -191,7 +240,7 @@ handle_config_command() {
             fi
 
             RESTART_SERVICE=$restart_svc
-            update_config "$strategy" "$iface" "$gamefilter"
+            update_config "$strategy" "$iface" "$gamefiltertcp" "$gamefilterudp" "$fw_backend"
             ;;
         -h|--help|"")
             show_config_usage

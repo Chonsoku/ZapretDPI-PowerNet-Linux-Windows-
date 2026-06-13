@@ -56,7 +56,7 @@ cd zapret-discord-youtube-linux
 
 Адаптер по умолчанию использует:
 - **nfqws**: v72.9 (рекомендованная версия, прописана в `src/lib/constants.sh` как `ZAPRET_RECOMMENDED_VERSION`)
-- **Стратегии**: [коммит cb9aed09449e1c51a9108c7989717c7c98a14301](https://github.com/Flowseal/zapret-discord-youtube/commit/cb9aed09449e1c51a9108c7989717c7c98a14301) (прописан в `src/lib/constants.sh` как `MAIN_REPO_REV`)
+- **Стратегии**: [коммит ef19845a801e4e743f7bdfdbd58f9745c6adbd60](https://github.com/Flowseal/zapret-discord-youtube/commit/ef19845a801e4e743f7bdfdbd58f9745c6adbd60) (прописан в `src/lib/constants.sh` как `MAIN_REPO_REV`)
 
 Вы можете изменить версии:
 - Интерактивно: `./service.sh download-deps` (выбор из доступных версий)
@@ -90,7 +90,8 @@ cd zapret-discord-youtube-linux
 ```bash
 strategy=general.bat
 interface=enp0s3
-gamefilter=true
+gamefiltertcp=true
+gamefiterudp=true
 ```
 
 ## Управление через CLI
@@ -128,7 +129,7 @@ gamefilter=true
 
 # Прямые параметры
 ./service.sh run -s general.bat -i enp0s3
-./service.sh run -s general.bat -i enp0s3 -g  # с gamefilter
+./service.sh run -s general.bat -i enp0s3 -gt -gu  # с gamefiltertcp и gamefilterudp
 ```
 
 ### Управление системным сервисом
@@ -163,7 +164,7 @@ gamefilter=true
 
 # Установить конфигурацию напрямую
 ./service.sh config set general.bat
-./service.sh config set general.bat enp0s3 -g  # с gamefilter
+./service.sh config set general.bat enp0s3 -gt -gu  # с gamefiltertcp и gamefilterudp
 ./service.sh config set discord -n             # без перезапуска сервиса
 ```
 
@@ -201,6 +202,19 @@ gamefilter=true
 4. Предлагает запустить или сохранить рабочую стратегию в `conf.env`
 
 > Функционал экспериментальный, достоверность не гарантирована
+
+-----
+```bash
+./auto_tune.sh
+```
+
+Скрипт для проверки любого домена:
+1. Перебирает стратегии из `/custom-strategies` и `/zapret-latest` (начинающиеся на `general`)
+2. Тестирует доступ ко всем указанным через пробел доменам
+3. Сохраняет стратегии сработавшие только на все указанные домены в auto_tune_results.sh
+
+> Функционал также экспериментальный
+
 
 ---
 

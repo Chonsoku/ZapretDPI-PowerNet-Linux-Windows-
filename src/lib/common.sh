@@ -33,19 +33,29 @@ handle_error() {
     exit 1
 }
 
+show_error() {
+    echo -e "\e[31mОшибка: $1\e[0m"
+    read -p "Нажмите Enter для продолжения..."
+}
+
 # -----------------------------------------------------------------------------
 # Проверка зависимостей
 # -----------------------------------------------------------------------------
 
 check_dependencies() {
     export PATH="$PATH:/usr/local/sbin:/usr/sbin:/sbin"
-    local deps=("git" "nft" "grep" "sed" "curl")
+    local deps=("git" "grep" "sed" "curl")
 
     for dep in "${deps[@]}"; do
         if ! command -v "$dep" >/dev/null 2>&1; then
             handle_error "Не установлена утилита $dep"
-        fi   
+        fi
     done
+
+    # Проверяем наличие хотя бы одного бэкенда файрвола
+    if ! command -v nft &>/dev/null && ! command -v iptables &>/dev/null; then
+        handle_error "Не установлен nftables или iptables. Установите один из них."
+    fi
 }
 
 # -----------------------------------------------------------------------------
@@ -61,12 +71,18 @@ check_conf_file() {
         return 1
     fi
 
-    local required_fields=("interface" "gamefilter" "strategy")
+    local required_fields=("interface" "gamefiltertcp" "gamefilterudp" "strategy")
     for field in "${required_fields[@]}"; do
         if ! grep -q "^${field}=[^[:space:]]" "$conf_file"; then
             return 1
         fi
     done
+
+    # firewall_backend опционален — по умолчанию auto
+    if ! grep -q "^firewall_backend=" "$conf_file"; then
+        echo "firewall_backend=auto" >> "$conf_file"
+    fi
+
     return 0
 }
 
@@ -80,9 +96,12 @@ load_config() {
 
     source "$conf_file"
 
-    if [[ -z "$interface" ]] || [[ -z "$gamefilter" ]] || [[ -z "$strategy" ]]; then
+    if [[ -z "$interface" ]] || [[ -z "$gamefiltertcp" ]] || [[ -z "$gamefilterudp" ]] || [[ -z "$strategy" ]]; then
         handle_error "Отсутствуют обязательные параметры в конфигурационном файле"
     fi
+
+    # По умолчанию автоопределение бэкенда
+    FIREWALL_BACKEND="${firewall_backend:-auto}"
 }
 
 # -----------------------------------------------------------------------------
@@ -186,12 +205,13 @@ ensure_config_exists() {
             create_conf_file
         else
             echo "Операция отменена."
-            return 1
+            read -p "Нажмите Enter для продолжения..."
+            return 0
         fi
         # Перепроверяем конфигурацию
         if ! check_conf_file; then
-            echo "Файл конфигурации всё ещё некорректен. Операция отменена."
-            return 1
+            show_error "Файл конфигурации всё ещё некорректен. Операция отменена."
+            return 0
         fi
     fi
     return 0
@@ -261,8 +281,8 @@ select_strategy_interactive() {
             log "Выбрана стратегия: $selected_strategy"
             return 0
         fi
-        echo "Неверный выбор. Попробуйте еще раз."
-    done
+        show_error "Неверный выбор. Попробуйте еще раз."
+done
 }
 
 # Получение полного пути к файлу стратегии
@@ -304,8 +324,17 @@ parse_bat_file() {
     if [ "$USE_GAME_FILTER" = true ]; then
         content="${content//%GameFilter%/$GAME_FILTER_PORTS}"
         #TCP and UDP
-        content="${content//%GameFilterTCP%/$GAME_FILTER_TCP_PORTS}"
-        content="${content//%GameFilterUDP%/$GAME_FILTER_UDP_PORTS}"
+        if [ "$USE_GAME_FILTER_TCP" = true ]; then
+            content="${content//%GameFilterTCP%/$GAME_FILTER_PORTS}"
+        else
+            content="${content//%GameFilterTCP%/$GAME_FILTER_OFF_PORTS}"
+        fi
+
+        if [ "$USE_GAME_FILTER_UDP" = true ]; then
+            content="${content//%GameFilterUDP%/$GAME_FILTER_PORTS}"
+        else
+            content="${content//%GameFilterUDP%/$GAME_FILTER_OFF_PORTS}"
+        fi
     else
         content="${content//,%GameFilter%/}"
         content="${content//%GameFilter%,/}"
@@ -373,13 +402,19 @@ start_nfqws() {
     stop_nfqws
     cd "$REPO_DIR" || handle_error "Не удалось перейти в директорию $REPO_DIR"
 
-    local full_params=""
+    local full_params=(
+        "$NFQWS_PATH"
+        --daemon
+        --dpi-desync-fwmark="$NFT_MARK"
+        --qnum="$NFT_QUEUE_NUM"
+    )
+
     for params in "${nfqws_params[@]}"; do
-        full_params="$full_params $params"
+        full_params+=($params)
     done
 
-    debug_log "Запуск nfqws с параметрами: $NFQWS_PATH --daemon --dpi-desync-fwmark=$NFT_MARK --qnum=$NFT_QUEUE_NUM $full_params"
-    eval "elevate $NFQWS_PATH --daemon --dpi-desync-fwmark=$NFT_MARK --qnum=$NFT_QUEUE_NUM $full_params" ||
+    debug_log "Запуск NFQWS с параметрами: ${full_params[@]}"
+    elevate "${full_params[@]}" ||
         handle_error "Ошибка при запуске nfqws"
 }
 
@@ -388,21 +423,37 @@ start_nfqws() {
 # -----------------------------------------------------------------------------
 
 # Запуск zapret с указанной конфигурацией
-# Использует глобальные переменные из conf.env: interface, gamefilter, strategy
+# Использует глобальные переменные из conf.env: interface, gamefiltertcp, gamefilterudp, strategy
 # Требует: REPO_DIR, NFQWS_PATH, STOP_SCRIPT
 run_zapret() {
     # Остановка предыдущего экземпляра
-    source "$BASE_DIR/src/lib/firewall.sh"
     stop_nfqws
-    nft_clear
+    firewall_clear
     sleep 1
 
     # Установка USE_GAME_FILTER
-    if [ "$gamefilter" == "true" ]; then
+    if [ "$gamefiltertcp" == "true" -a "$gamefilterudp" == "true" ]; then
         USE_GAME_FILTER=true
-        log "GameFilter включен"
+        USE_GAME_FILTER_TCP=true
+        USE_GAME_FILTER_UDP=true
+        log "GameFilterTCP и GameFilterUDP включен"
+
+    elif [ "$gamefiltertcp" == "true" ]; then
+        USE_GAME_FILTER=true
+        USE_GAME_FILTER_TCP=true
+        USE_GAME_FILTER_UDP=false
+        log "GameFilterTCP включен"
+
+    elif [ "$gamefilterudp" == "true" ]; then
+        USE_GAME_FILTER=true
+        USE_GAME_FILTER_TCP=false
+        USE_GAME_FILTER_UDP=true
+        log "GameFilterUDP включен"
+
     else
         USE_GAME_FILTER=false
+        USE_GAME_FILTER_TCP=false
+        USE_GAME_FILTER_UDP=false
         log "GameFilter выключен"
     fi
 
@@ -416,11 +467,12 @@ run_zapret() {
     # Парсим стратегию
     parse_bat_file "$strategy_path"
 
-    # Настройка nftables
-    log "Настройка nftables..."
-    nft_setup "$tcp_ports" "$udp_ports" "$interface" ||
-        handle_error "Ошибка при настройке nftables"
-    log "Настройка nftables завершена (TCP: $tcp_ports, UDP: $udp_ports)"
+    # Настройка файрвола
+    local backend
+    backend=$(detect_firewall_backend) || handle_error "Не удалось определить бэкенд файрвола"
+    log "Настройка $backend..."
+    firewall_setup "$tcp_ports" "$udp_ports" "$interface" ||
+        handle_error "Ошибка при настройке $backend"
 
     # Запуск nfqws
     start_nfqws

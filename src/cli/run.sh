@@ -11,11 +11,13 @@ show_run_usage() {
     echo "Run zapret in foreground (useful for testing)."
     echo
     echo "Options:"
-    echo "    -c, --config FILE       Load configuration from file"
-    echo "    -s, --strategy NAME     Use specific strategy"
-    echo "    -i, --interface NAME    Network interface (default: any)"
-    echo "    -g, --gamefilter        Enable gamefilter"
-    echo "    -h, --help              Show this help"
+    echo "    -c, --config FILE           Load configuration from file"
+    echo "    -s, --strategy NAME         Use specific strategy"
+    echo "    -i, --interface NAME        Network interface (default: any)"
+    echo "    -fb, --firewall-backend F   Firewall backend: auto, nftables, iptables, ..."
+    echo "    -gt, --gamefiltertcp        Enable gamefiltertcp"
+    echo "    -gu, --gamefilterudp        Enable gamefilterudp"
+    echo "    -h, --help                  Show this help"
     echo
     echo "Modes:"
     echo "    1. Interactive mode (no options):"
@@ -40,7 +42,9 @@ run_zapret_command() {
     local use_config=""
     local use_strategy=""
     local use_interface="any"
-    local use_gamefilter="false"
+    local use_gamefilter_tcp="false"
+    local use_gamefilter_udp="false"
+    local use_firewall_backend=""
     local interactive=true
 
     # Парсинг аргументов
@@ -60,8 +64,16 @@ run_zapret_command() {
                 use_interface="$2"
                 shift 2
                 ;;
-            -g|--gamefilter)
-                use_gamefilter="true"
+            -fb|--firewall-backend)
+                use_firewall_backend="$2"
+                shift 2
+                ;;
+            -gt|--gamefiltertcp)
+                use_gamefilter_tcp="true"
+                shift
+                ;;
+            -gu|--gamefilterudp)
+                use_gamefilter_udp="true"
                 shift
                 ;;
             -h|--help)
@@ -91,13 +103,19 @@ run_zapret_command() {
         fi
         echo "Загрузка конфигурации из: $use_config"
         load_config "$use_config"
+        # -fb может переопределить бэкенд из конфига
+        if [[ -n "$use_firewall_backend" ]]; then
+            FIREWALL_BACKEND="$use_firewall_backend"
+        fi
 
     # Режим 2: Прямые параметры
     elif [[ -n "$use_strategy" ]]; then
-        echo "Запуск с параметрами: strategy=$use_strategy, interface=$use_interface, gamefilter=$use_gamefilter"
+        echo "Запуск с параметрами: strategy=$use_strategy, interface=$use_interface, gamefiltertcp=$use_gamefilter_tcp, gamefilterudp=$use_gamefilter_udp"
         strategy="$use_strategy"
         interface="$use_interface"
-        gamefilter="$use_gamefilter"
+        gamefiltertcp="$use_gamefilter_tcp"
+        gamefilterudp="$use_gamefilter_udp"
+        FIREWALL_BACKEND="${use_firewall_backend:-auto}"
 
     # Режим 3: Интерактивный выбор
     elif [[ "$interactive" == true ]]; then
@@ -112,15 +130,42 @@ run_zapret_command() {
                 echo "Выбран интерфейс: $interface"
                 break
             fi
-            echo "Неверный выбор. Попробуйте еще раз."
+            show_error "Неверный выбор. Попробуйте еще раз."
         done
 
-        # Gamefilter
-        read -p "Включить Gamefilter? [y/N]: " enable_gf
-        if [[ "$enable_gf" =~ ^[Yy1] ]]; then
-            gamefilter="true"
+        #Gamefilter
+        echo ""
+        read -p "GameFilterTCP [y/N]:" gamefiltertcp_choice
+        if [[ ! "${gamefiltertcp_choice:-N}" =~ ^[Yy]$ ]]; then
+            gamefiltertcp="false"
         else
-            gamefilter="false"
+            gamefiltertcp="true"
+        fi
+        
+        echo ""
+        read -p "GameFilterUDP [y/N]:" gamefilterudp_choice
+        if [[ ! "${gamefilterudp_choice:-N}" =~ ^[Yy]$ ]]; then
+            gamefilterudp="false"
+        else
+            gamefilterudp="true"
+        fi
+       
+        # Выбор бэкенда файрвола
+        echo ""
+        echo "Выберите бэкенд файрвола:"
+        local backends=()
+        local i=1
+        echo "$i) auto (автоопределение)"
+        ((i++))
+        while IFS= read -r backend; do
+            backends+=("$backend")
+            echo "$i) $backend"
+            ((i++))
+        done < <(list_available_backends)
+        read -p "Ваш выбор [1]: " fw_choice
+        FIREWALL_BACKEND="auto"
+        if [[ "$fw_choice" -gt 1 && "$fw_choice" -lt "$i" ]]; then
+            FIREWALL_BACKEND="${backends[$((fw_choice - 2))]}"
         fi
 
         # Выбор стратегии
@@ -144,12 +189,11 @@ run_daemon() {
     run_zapret_command --config "$CONF_FILE"
 }
 
-# Остановка zapret (nfqws + nftables)
+# Остановка zapret (nfqws + firewall rules)
 stop_zapret() {
-    source "$BASE_DIR/src/lib/firewall.sh"
     log "Остановка nfqws..."
     stop_nfqws
-    log "Очистка правил nftables..."
-    nft_clear
+    log "Очистка правил файрвола..."
+    firewall_clear
     log "Очистка завершена."
 }

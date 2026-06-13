@@ -92,17 +92,10 @@ restart_service() {
 remove_service() {
     echo "Остановка и удаление сервиса..."
 
-    if [[ -d "$SERVICE_DIR" ]]; then
-        elevate sv down "$SERVICE_NAME" 2>/dev/null || true
-        sleep 2
-    fi
-
+    elevate sv down "$SERVICE_NAME" 2>/dev/null || true
+    sleep 1
     elevate rm -rf "$SERVICE_DIR"
-    elevate rm "$SCAN_DIR/$SERVICE_NAME"
-
-    if pgrep -f "runsv $SERVICE_NAME" >/dev/null; then
-        elevate pkill -f "runsv $SERVICE_NAME"
-    fi
+    elevate rm -f "$SCAN_DIR/$SERVICE_NAME"
 
     echo "Сервис полностью удалён."
 }

@@ -136,7 +136,8 @@ download_nfqws() {
 
     # Проверяем что файл создан
     if [[ ! -f "$out_dir/nfqws" ]]; then
-        handle_error "Бинарник nfqws не был создан"
+        show_error "Бинарник nfqws не был создан"
+        return 0
     fi
 
     log "Бинарник nfqws успешно загружен" >&2
@@ -164,6 +165,7 @@ get_git_tags() {
 # Интерактивный выбор версии zapret (nfqws)
 # Записывает результат в переменную $selected_zapret_version
 select_zapret_version_interactive() {
+    clear
     echo "Выберите версию zapret (nfqws):"
     echo ""
     echo "1) $ZAPRET_RECOMMENDED_VERSION (Рекомендованная, протестированная)"
@@ -185,7 +187,8 @@ select_zapret_version_interactive() {
         3)
             read -p "Введите версию (тег): " selected_zapret_version
             if [[ -z "$selected_zapret_version" ]]; then
-                handle_error "Версия не может быть пустой!"
+                show_error "Версия не может быть пустой!"
+                select_zapret_version_interactive
             fi
             ;;
         4)
@@ -194,7 +197,8 @@ select_zapret_version_interactive() {
             tags=$(get_git_tags "https://github.com/${ZAPRET_REPO}")
 
             if [[ -z "$tags" ]]; then
-                handle_error "Теги не найдены в репозитории"
+                show_error "Теги не найдены в репозитории"
+                return 0
             fi
 
             # Преобразуем в массив
@@ -204,7 +208,8 @@ select_zapret_version_interactive() {
             done <<< "$tags"
 
             if [[ ${#tag_array[@]} -eq 0 ]]; then
-                handle_error "Теги не найдены в репозитории"
+                show_error "Теги не найдены в репозитории"
+                return 0
             fi
 
             # Формируем финальный список с рекомендованной версией первой
@@ -229,15 +234,16 @@ select_zapret_version_interactive() {
                     echo "Выбрана версия: $selected_zapret_version"
                     break
                 fi
-                echo "Неверный выбор. Попробуйте еще раз."
+                show_error "Неверный выбор. Попробуйте еще раз."
             done
             ;;
         5)
             echo -e "Пропуск загрузки nfqws\n"
             return 0
             ;;
-        *)  
-            handle_error "Такого варианта нет"
+        *)
+            show_error "Такого варианта нет"
+            select_zapret_version_interactive
             ;;
     esac
 }
@@ -245,6 +251,7 @@ select_zapret_version_interactive() {
 # Интерактивный выбор версии стратегий
 # Записывает результат в переменную $selected_strat_version
 select_strategy_version_interactive() {
+    clear
     echo "Выберите версию стратегий:"
     echo ""
     echo "1) $MAIN_REPO_REV (Рекомендованная, протестированная)"
@@ -261,7 +268,8 @@ select_strategy_version_interactive() {
         2)
             read -p "Введите хеш коммита или тег: " selected_strat_version
             if [[ -z "$selected_strat_version" ]]; then
-                handle_error "Версия не может быть пустой!"
+                show_error "Версия не может быть пустой!"
+                select_strategy_version_interactive
             fi
             ;;
             
@@ -271,7 +279,8 @@ select_strategy_version_interactive() {
             tags=$(get_git_tags "$REPO_URL")
 
             if [[ -z "$tags" ]]; then
-                handle_error "Теги не найдены в репозитории"
+                show_error "Теги не найдены в репозитории"
+                select_strategy_version_interactive
             fi
 
             # Преобразуем в массив
@@ -281,7 +290,8 @@ select_strategy_version_interactive() {
             done <<< "$tags"
 
             if [[ ${#tag_array[@]} -eq 0 ]]; then
-                handle_error "Теги не найдены в репозитории"
+                show_error "Теги не найдены в репозитории"
+                select_strategy_version_interactive
             fi
 
             echo ""
@@ -292,11 +302,12 @@ select_strategy_version_interactive() {
                     echo "Выбран тег: $tag"
                     break
                 fi
-                echo "Неверный выбор. Попробуйте еще раз."
+                show_error "Неверный выбор. Попробуйте еще раз."
             done
             ;;
         *)
-            handle_error "Такого варианта нет"
+            show_error "Такого варианта нет"
+            select_strategy_version_interactive
             ;;
     esac
 }
